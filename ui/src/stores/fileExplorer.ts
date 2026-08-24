@@ -206,6 +206,24 @@ export const useFileExplorerStore = defineStore("fileExplorer", () => {
         }
     }
 
+    /**
+     * Adds an imported file to its folder unless a node of that name is already there. Import
+     * overwrites the file server-side, so pushing a second node would leave two tree entries
+     * resolving to the same path — both editing the one underlying file.
+     */
+    function addImportedFile(siblings: TreeNode[], fileName: string, extension?: string): void {
+        if (siblings.some(item => item.fileName === fileName)) return
+
+        siblings.push({
+            id: Utils.uid(),
+            fileName,
+            extension,
+            type: "File",
+            leaf: true,
+        })
+        sorted(siblings)
+    }
+
     async function addFile(file: Omit<TreeNodeFile, "id" | "type">, parentPath?: string, creation: boolean = false): Promise<{ path?: string; file?: TreeNodeFile; }> {
         if(!namespaceId.value) return {}
         const {fileName, extension, content = "", leaf} = file
@@ -390,13 +408,9 @@ export const useFileExplorerStore = defineStore("fileExplorer", () => {
                     content,
                     path: `${folderPath}/${fileName}`,
                 })
-                currentFolder?.push({
-                    id: Utils.uid(),
-                    fileName: `${name}${extension ? `.${extension}` : ""}`,
-                    extension,
-                    type: "File",
-                    leaf: true,
-                })
+                if (currentFolder) {
+                    addImportedFile(currentFolder, `${name}${extension ? `.${extension}` : ""}`, extension)
+                }
             } else {
                 const content = await readFile(file)
                 const [name, extension] = getFileNameWithExtension(file.name)
@@ -406,13 +420,7 @@ export const useFileExplorerStore = defineStore("fileExplorer", () => {
                     path: file.name,
                 })
 
-                fileTree.value.push({
-                    id: Utils.uid(),
-                    fileName: `${name}${extension ? `.${extension}` : ""}`,
-                    extension,
-                    type: "File",
-                    leaf: true,
-                })
+                addImportedFile(fileTree.value, `${name}${extension ? `.${extension}` : ""}`, extension)
             }
         }
     }

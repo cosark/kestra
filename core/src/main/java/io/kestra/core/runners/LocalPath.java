@@ -3,6 +3,7 @@ package io.kestra.core.runners;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
+import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 
 /**
@@ -35,6 +36,17 @@ public interface LocalPath {
      * @throws SecurityException if the file is not allowed globally or specifically for this plugin.
      */
     boolean exists(URI uri) throws IOException;
+
+    /**
+     * Check this URI and return the real local path it denotes.
+     * <p>
+     * Callers that read the file themselves must use the returned path rather than the one they passed in,
+     * so that the path they open is the very one that was authorized.
+     *
+     * @param uri a file URI
+     * @throws SecurityException if the file is not allowed globally or specifically for this plugin.
+     */
+    Path realPath(URI uri) throws IOException;
 
     /**
      * Get a local file attributes.

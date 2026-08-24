@@ -30,6 +30,11 @@ kestra:
     type: local
     local:
       base-path: /tmp/unittest
+  local-files:
+    # Some tests feed a plain host path to a FILE input, which is only readable if explicitly allowed.
+    # Relative to the Gradle test working directory, which is the module directory.
+    allowed-paths:
+      - build/resources/test
   jdbc:
     queues:
       min-poll-interval: 10ms

@@ -6,6 +6,8 @@ import java.io.InputStream;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.GeneralSecurityException;
 import java.util.List;
 import java.util.Map;
@@ -773,6 +775,99 @@ class FlowInputOutputTest {
         // Then
         assertThat(result.get("upload")).isInstanceOf(URI.class);
         assertThat(result.get("upload").toString()).contains(executionId);
+    }
+
+    @Test
+    void shouldRejectFileInputPointingToUnauthorizedHostPath() throws Exception {
+        // Given: a host file outside the working directory and outside the `kestra.local-files.allowed-paths`
+        // configured in application-test.yml.
+        Path hostFile = Files.createTempFile("lfi-repro", ".txt");
+        Files.writeString(hostFile, "root:x:0:0:root:/root:/bin/bash");
+
+        Flow flow = Flow.builder()
+            .id("lfi-child")
+            .tenantId(MAIN_TENANT)
+            .namespace("io.kestra.test")
+            .inputs(List.of(FileInput.builder().id("d").type(Type.FILE).required(true).build()))
+            .build();
+
+        try {
+            // When: a caller (e.g. a parent flow's Subflow task) passes a plain host path as the FILE input
+            // Then: it must be refused, just like `read('file://<path>')` is.
+            assertThatThrownBy(() -> flowInputOutput.readExecutionInputs(flow, DEFAULT_TEST_EXECUTION, Map.of("d", hostFile.toString())))
+                .isInstanceOf(InputOutputValidationException.class)
+                .hasMessageContaining("is not authorized")
+                .hasMessageContaining(LocalPath.ALLOWED_PATHS_CONFIG);
+        } finally {
+            Files.deleteIfExists(hostFile);
+        }
+    }
+
+    @Test
+    void shouldAcceptFileInputPointingToAnInternalStorageUri() throws Exception {
+        // Given: a file already in internal storage, which is the normal case and must keep working
+        Flow flow = Flow.builder()
+            .id("lfi-child")
+            .tenantId(MAIN_TENANT)
+            .namespace("io.kestra.test")
+            .inputs(List.of(FileInput.builder().id("d").type(Type.FILE).required(true).build()))
+            .build();
+        URI stored = storageInterface.put(
+            MAIN_TENANT,
+            "io.kestra.test",
+            URI.create("/io/kestra/test/lfi-child/stored.txt"),
+            new ByteArrayInputStream("content".getBytes(StandardCharsets.UTF_8))
+        );
+
+        // When
+        Map<String, Object> result = flowInputOutput.readExecutionInputs(flow, DEFAULT_TEST_EXECUTION, Map.of("d", stored.toString()));
+
+        // Then
+        assertThat(result.get("d")).hasToString(stored.toString());
+    }
+
+    @Test
+    void shouldRejectFileInputPointingToASymlinkEscapingAnAllowedPath() throws Exception {
+        // Given: a symlink that sits inside an allowed path but resolves outside it
+        Path outside = Files.createTempFile("lfi-repro-target", ".txt");
+        Files.writeString(outside, "root:x:0:0:root:/root:/bin/bash");
+        Path link = Path.of("build/resources/test").toRealPath().resolve("lfi-repro-link.txt");
+        Files.deleteIfExists(link);
+        Files.createSymbolicLink(link, outside);
+
+        Flow flow = Flow.builder()
+            .id("lfi-child")
+            .tenantId(MAIN_TENANT)
+            .namespace("io.kestra.test")
+            .inputs(List.of(FileInput.builder().id("d").type(Type.FILE).required(true).build()))
+            .build();
+
+        try {
+            // When / Then: the link target is what gets checked, so this is refused
+            assertThatThrownBy(() -> flowInputOutput.readExecutionInputs(flow, DEFAULT_TEST_EXECUTION, Map.of("d", link.toString())))
+                .isInstanceOf(InputOutputValidationException.class)
+                .hasMessageContaining("is not authorized")
+                .hasMessageContaining(outside.toRealPath().toString());
+        } finally {
+            Files.deleteIfExists(link);
+            Files.deleteIfExists(outside);
+        }
+    }
+
+    @Test
+    void shouldExplainThatAFileInputPointingToAMissingHostFileDoesNotExist() {
+        // Given
+        Flow flow = Flow.builder()
+            .id("lfi-child")
+            .tenantId(MAIN_TENANT)
+            .namespace("io.kestra.test")
+            .inputs(List.of(FileInput.builder().id("d").type(Type.FILE).required(true).build()))
+            .build();
+
+        // When / Then: the failure must say what is wrong, not just repeat the path back
+        assertThatThrownBy(() -> flowInputOutput.readExecutionInputs(flow, DEFAULT_TEST_EXECUTION, Map.of("d", "/nonexistent/nope.txt")))
+            .isInstanceOf(InputOutputValidationException.class)
+            .hasMessageContaining("does not exist");
     }
 
     private static Stream<Input<?>> inputsThatDoNotAcceptFileUploads() {

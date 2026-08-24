@@ -4,6 +4,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.URI;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -68,17 +70,20 @@ public class FlowInputOutput {
     private final Optional<String> secretKey;
     private final Provider<RunContextFactory> runContextFactory; // Lazy init: avoid circular dependency error.
     private final ReusableInputsExpander reusableInputsExpander;
+    private final LocalPathFactory localPathFactory;
 
     @Inject
     public FlowInputOutput(
         StorageInterface storageInterface,
         Provider<RunContextFactory> runContextFactory,
         EncryptionConfig encryptionConfig,
-        ReusableInputsExpander reusableInputsExpander) {
+        ReusableInputsExpander reusableInputsExpander,
+        LocalPathFactory localPathFactory) {
         this.storageInterface = storageInterface;
         this.runContextFactory = runContextFactory;
         this.secretKey = encryptionConfig.asOptional();
         this.reusableInputsExpander = reusableInputsExpander;
+        this.localPathFactory = localPathFactory;
     }
 
     /**
@@ -401,10 +406,12 @@ public class FlowInputOutput {
 
             // Reject a file upload bound to an input that doesn't accept one.
             if (resolvable.isFromFileUpload() && !acceptsFileUpload(input.getType())) {
-                resolvable.resolveWithError(InputOutputValidationException.of(
-                    "A file upload is only accepted by an input of type FILE, but this input is of type %s.".formatted(input.getType()),
-                    input
-                ));
+                resolvable.resolveWithError(
+                    InputOutputValidationException.of(
+                        "A file upload is only accepted by an input of type FILE, but this input is of type %s.".formatted(input.getType()),
+                        input
+                    )
+                );
                 return resolvable.get();
             }
 
@@ -610,7 +617,21 @@ public class FlowInputOutput {
                     if (URIFetcher.supports(uri)) {
                         yield uri;
                     } else {
-                        yield storageInterface.from(execution, id, current.toString().substring(current.toString().lastIndexOf("/") + 1), new File(current.toString()));
+                        // A schemeless value is a host path, and copying it into internal storage reads a file off the
+                        // server. It must therefore respect `kestra.local-files.allowed-paths` just like `read('file://...')`
+                        // does, otherwise a FILE input is a way around that check. Inputs are resolved before the
+                        // execution starts, so there is no working directory to allow: only globally allowed paths apply.
+                        File localFile = new File(current.toString());
+                        Path allowedPath;
+                        try {
+                            // Read the authorized path itself, so a symlink cannot be re-pointed after the check.
+                            allowedPath = localPathFactory.createLocalPath().realPath(localFile.toURI());
+                        } catch (NoSuchFileException e) {
+                            // NoSuchFileException carries only the path, which on its own reads as an unexplained error.
+                            throw new IllegalArgumentException("The file '" + localFile + "' does not exist.", e);
+                        }
+                        // Keep the name the user supplied: with a symlink the target's name is not what they asked for.
+                        yield storageInterface.from(execution, id, localFile.getName(), allowedPath.toFile());
                     }
                 }
                 case JSON -> (current instanceof Map || current instanceof Collection<?>) ? current : JacksonMapper.toObject(current.toString());

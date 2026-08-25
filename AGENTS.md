@@ -334,6 +334,7 @@ This copies the gitignored `cli/src/main/resources/application-*.yml` files from
 - **Build failures:** Run `./gradlew clean` and retry
 - **Test failures:** Check for service dependencies (Docker containers)
 - **Frontend issues:** Ensure Node.js version matches package.json requirements
+- **`npm install` fails with `EBADENGINE`:** the UI workspaces (`ui/`, `ui-ee/`) require npm >= 11.7 and set `engine-strict=true`. Older npm mislabels the `sass`/`sass-embedded` platform binaries as peer dependencies and rewrites `package-lock.json` with spurious `"peer": true` entries on every install. Install the pinned version (`npm i -g npm@11.16.0`) or use the Node release named in `ui/.nvmrc`.
 
 **Debugging:**
 - Use IDE debugging with remote JVM debugging
